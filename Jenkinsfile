@@ -11,7 +11,7 @@ pipeline {
     options {
         buildDiscarder(logRotator(numToKeepStr: '10')) // שומר רק 10 בניות אחרונות
         timestamps() // לוג עם זמן
-        ansiColor('xterm') // צבעים בלוג
+        //ansiColor('xterm') // צבעים בלוג
     }
 
     stages {
