@@ -1,87 +1,111 @@
+
 pipeline {
     agent any
-
+    
     environment {
-        IMAGE_NAME = "my-node-app"
-        DOCKER_REGISTRY = "your-docker-registry" // לדוגמה Docker Hub או Registry פרטי
-        DOCKER_CREDENTIALS = "docker-hub-credentials" // Jenkins credentials ID
-        APP_PORT = "3000"
+        APP_NAME = "jenkins-demo-app"
+        DOCKER_IMAGE = "${APP_NAME}"
+        BUILD_TAG = "${BUILD_NUMBER}"
+        CONTAINER_NAME = "${APP_NAME}-${BUILD_NUMBER}"
     }
-
-    options {
-        buildDiscarder(logRotator(numToKeepStr: '10')) // שומר רק 10 בניות אחרונות
-        timestamps() // לוג עם זמן
-        //ansiColor('xterm') // צבעים בלוג
-    }
-
+    
     stages {
-
         stage('Checkout') {
             steps {
-                echo "Checking out source code from Git"
+                echo '📥 Checking out code from Git...'
                 checkout scm
             }
         }
-
+        
         stage('Install Dependencies') {
             steps {
-                echo "Installing npm dependencies"
+                echo '📦 Installing Node.js dependencies...'
                 sh 'npm install'
             }
         }
-
+        
         stage('Run Tests') {
             steps {
-                echo "Running automated tests"
-                sh 'npm test || true' // אם אין בדיקות עדיין, לא יפסיק את Pipeline
+                echo '✅ Running tests...'
+                sh 'npm test'
             }
         }
-
+        
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image"
+                echo '🐳 Building Docker image...'
                 script {
-                    docker.build("${IMAGE_NAME}:latest")
+                    sh "docker build -t ${DOCKER_IMAGE}:${BUILD_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE}:${BUILD_TAG} ${DOCKER_IMAGE}:latest"
                 }
             }
         }
-
-        stage('Push Docker Image') {
+        
+        stage('Test Docker Image') {
             steps {
-                echo "Pushing Docker image to registry"
+                echo '🧪 Testing Docker image...'
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", "${DOCKER_CREDENTIALS}") {
-                        docker.image("${IMAGE_NAME}:latest").push()
-                    }
+                    sh "docker images | grep ${DOCKER_IMAGE}"
                 }
             }
         }
-
+        
         stage('Deploy') {
             steps {
-                echo "Deploying Docker container"
+                echo '🚀 Deploying application...'
                 script {
-                    // עצירת container קודם אם קיים
-                    sh """
-                    docker stop ${IMAGE_NAME} || true
-                    docker rm ${IMAGE_NAME} || true
-                    docker run -d -p ${APP_PORT}:${APP_PORT} --name ${IMAGE_NAME} ${IMAGE_NAME}:latest
-                    """
+                    // Stop old containers
+                    sh '''
+                        docker ps -a | grep ${APP_NAME} | awk '{print $1}' | xargs -r docker stop || true
+                        docker ps -a | grep ${APP_NAME} | awk '{print $1}' | xargs -r docker rm || true
+                    '''
+                    
+                    // Run new container
+                    sh "docker run -d --name ${CONTAINER_NAME} -p 3000:3000 ${DOCKER_IMAGE}:${BUILD_TAG}"
+                    
+                    // Wait and test
+                    sh 'sleep 5'
+                    sh 'curl -f http://localhost:3000/health || exit 1'
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                echo '✅ Verifying deployment...'
+                script {
+                    sh "docker ps | grep ${CONTAINER_NAME}"
+                    sh 'curl -s http://localhost:3000 | grep "Jenkins CI/CD Demo"'
+                    echo '✅ Application is running successfully!'
                 }
             }
         }
     }
-
+    
     post {
-        always {
-            echo "Cleaning up workspace"
-            cleanWs()
-        }
         success {
-            echo "Pipeline finished successfully!"
+            echo '''
+            ✅✅✅ Pipeline Completed Successfully! ✅✅✅
+            🚀 Application deployed and running on http://localhost:3000
+            🐳 Docker image: ${DOCKER_IMAGE}:${BUILD_TAG}
+            🎉 Build #${BUILD_NUMBER} is live!
+            '''
         }
         failure {
-            echo "Pipeline failed. Check logs!"
+            echo '❌ Pipeline failed! Check the logs above.'
+            script {
+                sh "docker stop ${CONTAINER_NAME} 2>/dev/null || true"
+                sh "docker rm ${CONTAINER_NAME} 2>/dev/null || true"
+            }
+        }
+        always {
+            echo 'Cleaning up old images...'
+            script {
+                sh '''
+                    docker images | grep ${DOCKER_IMAGE} | grep -v latest | grep -v ${BUILD_TAG} | awk '{print $3}' | xargs -r docker rmi -f || true
+                '''
+            }
         }
     }
 }
+EOF
